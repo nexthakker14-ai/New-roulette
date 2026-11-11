@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>777UA — живий моніторинг</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;padding:22px 16px 40px;background:#10141b;color:#f3f5f7;font:16px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}
+main{max-width:680px;margin:auto}h1{font-size:25px;margin:8px 0 10px}.muted{color:#aeb8c6;line-height:1.5}
+.panel{background:#1b2430;border:1px solid #344253;border-radius:14px;padding:16px;margin:16px 0}
+label{display:block;font-size:14px;color:#c8d1dc;margin:12px 0 6px}input{width:100%;padding:13px;border-radius:9px;border:1px solid #526174;background:#101720;color:white;font-size:16px}
+button{width:100%;padding:15px;border:0;border-radius:10px;background:#2674e8;color:white;font-size:17px;font-weight:650;margin-top:12px}
+button.stop{background:#a43d3d}button:disabled{opacity:.55}
+#status{padding:12px;border-radius:9px;background:#101720;line-height:1.45;white-space:pre-wrap}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#101720;padding:12px;border-radius:9px;color:#d7e2ef;font-size:13px}
+video{width:100%;max-height:260px;background:#000;border-radius:9px;margin-top:12px}
+.warning{color:#ffd58a;font-size:14px;line-height:1.5}
+</style>
+</head>
+<body><main>
+<h1>Живий моніторинг рулетки</h1>
+<p class="muted">Сторінка перевіряє, чи браузер на цьому пристрої дозволяє передавати зображення екрана. Результати OCR не записуються в історію автоматично.</p>
+<section class="panel">
+<label for="secret">API-секрет (той, що збережений у Railway Variables)</label>
+<input id="secret" type="password" autocomplete="off" placeholder="Введи секрет локально — не надсилай його в чат">
+<button id="start">Почати моніторинг</button>
+<button id="stop" class="stop" hidden>Зупинити</button>
+<p id="status" role="status">Очікує запуску.</p>
+<video id="preview" autoplay muted playsinline hidden></video>
+<p class="warning">Якщо Chrome на iPad не підтримує захоплення екрана або iPadOS не надає дозвіл, сторінка покаже повідомлення. Не вводь API-секрет на чужому пристрої.</p>
+</section>
+<section class="panel">
+<h2 style="font-size:18px;margin-top:0">Останній результат OCR</h2>
+<pre id="result">Поки немає даних.</pre>
+</section>
+</main>
+<script>
+const startButton=document.getElementById('start');
+const stopButton=document.getElementById('stop');
+const statusBox=document.getElementById('status');
+const secretInput=document.getElementById('secret');
+const video=document.getElementById('preview');
+const resultBox=document.getElementById('result');
+let stream=null,timer=null,busy=false;
+function status(message){statusBox.textContent=message}
+function stopMonitoring(message='Моніторинг зупинено.'){
+ if(timer)clearInterval(timer);timer=null;
+ if(stream){stream.getTracks().forEach(track=>track.stop());stream=null}
+ video.srcObject=null;video.hidden=true;startButton.hidden=false;stopButton.hidden=true;busy=false;status(message)
+}
+async function sendFrame(){
+ if(!stream||busy||video.readyState<2)return;
+ busy=true;
+ try{
+  const canvas=document.createElement('canvas');
+  canvas.width=video.videoWidth;canvas.height=video.videoHeight;
+  const ctx=canvas.getContext('2d');ctx.drawImage(video,0,0);
+  const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.94));
+  if(!blob)throw new Error('Не вдалося підготувати кадр');
+  const form=new FormData();form.append('file',blob,'live-frame.jpg');
+  const response=await fetch('/api/screenshot',{method:'POST',headers:{'x-api-secret':secretInput.value},body:form});
+  const data=await response.json();
+  if(!response.ok)throw new Error(data.detail||('HTTP '+response.status));
+  resultBox.textContent=JSON.stringify(data,null,2);
+  status('Моніторинг активний. Останній кадр оброблено; дані не збережені в історію.');
+ }catch(error){status('Помилка передавання кадру: '+error.message)}
+ finally{busy=false}
+}
+startButton.addEventListener('click',async()=>{
+ if(!secretInput.value.trim()){status('Введи API-секрет у це поле. Він не потрібен у чаті.');return}
+ if(!navigator.mediaDevices||typeof navigator.mediaDevices.getDisplayMedia!=='function'){
+  status('Цей браузер не надає API захоплення екрана. На цьому iPad живий режим через вебсторінку недоступний.');
+  return;
+ }
+ try{
+  status('Очікую дозвіл на захоплення екрана…');
+  stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:2},audio:false});
+  video.srcObject=stream;video.hidden=false;
+  await video.play();
+  startButton.hidden=true;stopButton.hidden=false;
+  stream.getVideoTracks()[0].addEventListener('ended',()=>stopMonitoring('Системне захоплення екрана завершено.'));
+  status('Екран підключено. Обробляю кадр кожні 3 секунди.');
+  await sendFrame();timer=setInterval(sendFrame,3000);
+ }catch(error){stopMonitoring('Не вдалося почати захоплення: '+error.message+'. Перевір дозвіл браузера або підтримку iPadOS.')}
+});
+stopButton.addEventListener('click',()=>stopMonitoring());
+</script>
+</body></html>

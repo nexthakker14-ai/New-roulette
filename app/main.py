@@ -4,7 +4,7 @@ import re
 import io
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException, UploadFile, File
+from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Request
 from fastapi.responses import HTMLResponse
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -61,6 +61,26 @@ def root():
 def monitor_page():
     page = Path(__file__).with_name("monitor.html")
     return HTMLResponse(page.read_text(encoding="utf-8"))
+
+
+@app.post("/api/rtmp/auth")
+async def rtmp_publish_auth(request: Request):
+    """Authorize SRS RTMP publishers using the configured stream key."""
+    expected = os.getenv("RTMP_STREAM_KEY", "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="RTMP_STREAM_KEY is not configured")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid callback payload")
+
+    stream = str(payload.get("stream", ""))
+    action = str(payload.get("action", ""))
+    if action != "on_publish" or stream != expected:
+        raise HTTPException(status_code=403, detail="RTMP publish rejected")
+
+    return {"code": 0, "message": "publish authorized"}
 
 
 @app.get("/health")

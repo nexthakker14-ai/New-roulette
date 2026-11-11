@@ -6,7 +6,12 @@ from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
-from PIL import Image
+from PIL import (
+    Image,
+    ImageOps,
+    ImageEnhance,
+    ImageFilter
+)
 import pytesseract
 
 from .storage import (
@@ -21,7 +26,7 @@ from .telegram import send_message
 
 app = FastAPI(
     title="777UA Auto Lightning Roulette",
-    version="1.0.0"
+    version="1.1.0"
 )
 
 
@@ -133,11 +138,12 @@ async def screenshot(
 
     width, height = img.size
 
-    x = float(os.getenv("OCR_X", "0.50"))
-    y = float(os.getenv("OCR_Y", "0.00"))
-    w = float(os.getenv("OCR_W", "0.50"))
-    h = float(os.getenv("OCR_H", "0.08"))
+    x = float(os.getenv("OCR_X", "0.52"))
+    y = float(os.getenv("OCR_Y", "0.16"))
+    w = float(os.getenv("OCR_W", "0.48"))
+    h = float(os.getenv("OCR_H", "0.04"))
 
+    # Вирізаємо смужку результатів
     crop = img.crop((
         int(width * x),
         int(height * y),
@@ -145,17 +151,54 @@ async def screenshot(
         int(height * min(1, y + h))
     ))
 
-    recognized = pytesseract.image_to_string(
-        crop,
-        config="--psm 6"
+    if crop.width == 0 or crop.height == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid OCR crop coordinates"
+        )
+
+    # Збільшуємо зображення у 4 рази
+    crop = crop.resize(
+        (
+            crop.width * 4,
+            crop.height * 4
+        ),
+        Image.Resampling.LANCZOS
     )
 
+    # Покращуємо якість зображення
+    crop = ImageOps.grayscale(crop)
+    crop = ImageOps.autocontrast(crop)
+
+    crop = ImageEnhance.Contrast(
+        crop
+    ).enhance(2.0)
+
+    crop = ImageEnhance.Sharpness(
+        crop
+    ).enhance(2.0)
+
+    crop = crop.filter(
+        ImageFilter.SHARPEN
+    )
+
+    # Розпізнаємо тільки цифри
+    recognized = pytesseract.image_to_string(
+        crop,
+        config=(
+            "--oem 3 --psm 7 "
+            "-c tessedit_char_whitelist=0123456789"
+        )
+    )
+
+    # Витягуємо числа від 0 до 36
     candidates = [
-        int(match.group())
-        for match in re.finditer(
-            r"(?<!\d)(?:[0-9]|[12][0-9]|3[0-6])(?!\d)",
+        int(value)
+        for value in re.findall(
+            r"\d{1,2}",
             recognized
         )
+        if 0 <= int(value) <= 36
     ]
 
     return {

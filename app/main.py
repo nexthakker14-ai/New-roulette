@@ -57,8 +57,12 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"ok": True}
-
+    return {
+        "ok": True,
+        "version": "1.2.0",
+        "ocr_mode": "individual_tokens",
+        "repository": "New-roulette"
+    }
 
 @app.get("/api/results")
 def results(limit: int = 30):

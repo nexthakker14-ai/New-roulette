@@ -6,13 +6,9 @@ from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
-from PIL import (
-    Image,
-    ImageOps,
-    ImageEnhance,
-    ImageFilter
-)
+from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 import pytesseract
+from pytesseract import Output
 
 from .storage import (
     init_db,
@@ -26,7 +22,7 @@ from .telegram import send_message
 
 app = FastAPI(
     title="777UA Auto Lightning Roulette",
-    version="1.1.0"
+    version="1.2.0"
 )
 
 
@@ -143,6 +139,16 @@ async def screenshot(
     w = float(os.getenv("OCR_W", "0.48"))
     h = float(os.getenv("OCR_H", "0.04"))
 
+    # Перевіряємо координати області OCR
+    if (
+        x < 0 or y < 0 or w <= 0 or h <= 0
+        or x >= 1 or y >= 1
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid OCR coordinates"
+        )
+
     # Вирізаємо смужку результатів
     crop = img.crop((
         int(width * x),
@@ -154,10 +160,10 @@ async def screenshot(
     if crop.width == 0 or crop.height == 0:
         raise HTTPException(
             status_code=400,
-            detail="Invalid OCR crop coordinates"
+            detail="Empty OCR area"
         )
 
-    # Збільшуємо зображення у 4 рази
+    # Збільшуємо область у 4 рази
     crop = crop.resize(
         (
             crop.width * 4,
@@ -166,7 +172,7 @@ async def screenshot(
         Image.Resampling.LANCZOS
     )
 
-    # Покращуємо якість зображення
+    # Покращуємо контрастність і різкість
     crop = ImageOps.grayscale(crop)
     crop = ImageOps.autocontrast(crop)
 
@@ -182,31 +188,84 @@ async def screenshot(
         ImageFilter.SHARPEN
     )
 
-    # Розпізнаємо тільки цифри
-    recognized = pytesseract.image_to_string(
-        crop,
-        config=(
-            "--oem 3 --psm 7 "
-            "-c tessedit_char_whitelist=0123456789"
-        )
+    # Шукаємо окремі текстові елементи,
+    # а не зчитуємо всю смужку одним рядком
+    config = (
+        "--oem 3 --psm 11 "
+        "-c tessedit_char_whitelist=0123456789"
     )
 
-    # Витягуємо числа від 0 до 36
-    candidates = [
-        int(value)
-        for value in re.findall(
-            r"\d{1,2}",
-            recognized
-        )
-        if 0 <= int(value) <= 36
+    data = pytesseract.image_to_data(
+        crop,
+        config=config,
+        output_type=Output.DICT
+    )
+
+    detected_items = []
+    candidate_numbers = []
+    rejected_tokens = []
+
+    for i, raw_text in enumerate(data["text"]):
+        token = raw_text.strip()
+
+        if not token:
+            continue
+
+        try:
+            confidence = float(data["conf"][i])
+        except (ValueError, TypeError):
+            confidence = -1
+
+        item = {
+            "text": token,
+            "confidence": round(confidence, 1),
+            "x": int(data["left"][i]),
+            "y": int(data["top"][i]),
+            "width": int(data["width"][i]),
+            "height": int(data["height"][i])
+        }
+
+        # Приймаємо тільки окреме число з 1 або 2 цифр
+        if not re.fullmatch(r"\d{1,2}", token):
+            rejected_tokens.append(item)
+            continue
+
+        number = int(token)
+
+        # Перевіряємо діапазон рулетки та впевненість OCR
+        if number < 0 or number > 36:
+            rejected_tokens.append(item)
+            continue
+
+        if confidence < 30:
+            rejected_tokens.append(item)
+            continue
+
+        detected_items.append(item)
+        candidate_numbers.append(number)
+
+    # Сортуємо знайдені числа зліва направо
+    detected_items.sort(key=lambda item: item["x"])
+    candidate_numbers = [
+        int(item["text"])
+        for item in detected_items
     ]
 
+    recognized_text = " ".join(
+        item["text"]
+        for item in detected_items
+    )
+
     return {
-        "recognized_text": recognized.strip(),
-        "candidate_numbers": candidates,
+        "recognized_text": recognized_text,
+        "candidate_numbers": candidate_numbers,
+        "detected_items": detected_items,
+        "rejected_tokens": rejected_tokens,
         "stored": False,
         "note": (
-            "Перевірте числа вручну перед додаванням "
-            "через POST /api/results."
+            "Числа не записані в базу. "
+            "Перевірте їх вручну. "
+            "Сумнівні фрагменти наведені окремо "
+            "у rejected_tokens."
         )
     }

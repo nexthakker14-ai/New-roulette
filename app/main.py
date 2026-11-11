@@ -5,6 +5,8 @@ import io
 from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException, UploadFile, File
+from fastapi.responses import HTMLResponse
+from pathlib import Path
 from pydantic import BaseModel, Field
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 import pytesseract
@@ -53,6 +55,12 @@ def root():
         "purpose": "roulette history analysis and Telegram alerts",
         "bet_automation": False
     }
+
+
+@app.get("/monitor", response_class=HTMLResponse)
+def monitor_page():
+    page = Path(__file__).with_name("monitor.html")
+    return HTMLResponse(page.read_text(encoding="utf-8"))
 
 
 @app.get("/health")

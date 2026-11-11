@@ -1,0 +1,6 @@
+FROM ossrs/srs:5
+
+WORKDIR /usr/local/srs
+EXPOSE 1935/tcp 1985/tcp 8080/tcp
+
+CMD ["./objs/srs", "-c", "conf/rtmp.conf"]
